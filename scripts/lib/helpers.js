@@ -72,25 +72,29 @@ export const getGraphqlSchemaFromUrl = async (
     }
 
 
-    // check if introspection is enabled first
-    const check = await fetchJson(
-        method === "POST" ? url : `${url}?query=${miniIntrospection}`,
-        config
-    );
-    if (!check) {
-        throw new Error('Failed to do introspection on graphql endpoint');
-    }
-    if (method === "POST") {
+    try {
+        // check if introspection is enabled before sending the large query
+        const check = await fetchJson(
+            method === "POST" ? url : `${url}?query=${miniIntrospection}`,
+            config
+        );
+
+        if (!check || !check.data || !check.data.__schema) {
+            throw new Error('Introspection query failed or introspection is disabled.');
+        }
+
         config.body = JSON.stringify({ query: INTROSPECTION_QUERY });
+        const responseJson = await fetchJson(
+            method === "POST" ? url : `${url}?query=${INTROSPECTION_QUERY}`,
+            config
+        );
+
+        const sdl = convertJsonToSdl(responseJson).replace(/Json/gm, "JSON");
+        return sdl;
+    } catch (err) {
+        console.error("Error in getGraphqlSchemaFromUrl: ", err.message);
+        throw err; // Propagate the error
     }
-
-    const responseJson = await fetchJson(
-        method === "POST" ? url : `${url}?query=${INTROSPECTION_QUERY}`,
-        config
-    );
-
-    const sdl = convertJsonToSdl(responseJson).replace(/Json/gm, "JSON");
-    return sdl;
 }
 
 
@@ -119,9 +123,16 @@ export const convertJsonToSdl = (raw) => {
 
 
 export const fetchJson = async (url, options = {}) => {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-        throw new Error(`Failed to fetch from ${url}. Status: ${response.status}`);
+    let response;
+    try {
+        response = await fetch(url, options);
+        if (!response.ok) { // Handles any response that is not 2xx
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return await response.json();
+    } catch (err) {
+        console.error("Error fetching json: ", err.message);
+        throw err; // Re-throw the error for upstream handling
     }
-    return response.json();
 }
+
